@@ -20,7 +20,11 @@ final case's 42 launches including the four practice ones):
   from the residual standard deviation:
       q_tau(h) = p1 * exp(median_h + z_tau * sd_h)
   with z = [-1.645, -0.674, 0, 0.674, 1.645]. The per-hour log quantiles are
-  then smoothed with a 3-point moving average across hours.
+  then smoothed with a 3-point moving average across hours. The spread is
+  the sample standard deviation of the residuals, floored at 0.10 and capped
+  at 0.45: the raw residual SDs run 0.46-0.59 for most hours, inflated by a
+  few wild launches, and the cap keeps the outer quantiles from sitting
+  absurdly far from the median.
   Launches whose hour 1 was before the real unlock (tiny hour-1 prints) are
   excluded from the fit when hour 1 is already substantial (p1 >= 20,000):
   they describe a different regime (a launch that has not started yet), and
@@ -31,8 +35,8 @@ final case's 42 launches including the four practice ones):
 Backtest (leave-one-out over the 38 comparable launch days, pinball loss on
 the log scale, lower is better):
   house baseline (persistence): 0.93 overall / 0.32 on launches with p1>=20k
-  this model:                  0.64 overall / 0.25 on launches with p1>=20k,
-                               0.18 on the 8 console-only launches
+  this model:                  0.65 overall / 0.25 on launches with p1>=20k,
+                               0.17 on the 8 console-only launches
   (the final is a console-only rolling launch, like the console-only set).
 
 Run as the grader runs it: `python3 -P -s /bot/main.py` (Python 3.13, standard
@@ -67,6 +71,13 @@ BIG_P1 = 20000
 # A floor on the per-hour log spread, so a degenerate fit never yields an
 # absurdly narrow band.
 MIN_SD = 0.10
+# A cap on the per-hour log spread. The residual SDs run 0.46-0.59 for most
+# hours, inflated by a few wild launches; uncapped, the outer quantiles sit
+# ~1.9x from the median and pinball punishes the width whenever the actual
+# lands near the median. Capping at 0.45 was the flat optimum on the
+# leave-one-out backtest (p1>=20k 0.2524 -> 0.2493, console 0.1770 -> 0.1705;
+# 0.40 and 0.50 are within 0.001 of it on p1>=20k).
+MAX_SD = 0.45
 # A guard on the fitted slope of log-ratio on log(hour-1 viewers).
 MAX_SLOPE = 1.5
 
@@ -166,7 +177,10 @@ def forecast_case(case: dict, name: str) -> dict:
             continue
         a, b, resid = linreg(xs, ys)
         median = a + b * log_p1
-        sd = max(MIN_SD, statistics.pstdev(resid)) if len(resid) > 1 else 0.3
+        # Sample (unbiased, n-1) spread of the residuals, floored so a
+        # degenerate fit never yields an absurdly narrow band, and capped
+        # (see MAX_SD) so a few wild launches never blow the band out.
+        sd = min(MAX_SD, max(MIN_SD, statistics.stdev(resid))) if len(resid) > 1 else 0.3
         log_q[h] = [median + z * sd for z in Z]
 
     # Smooth each quantile's log across hours (3-point moving average), then
